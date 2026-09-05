@@ -68,51 +68,61 @@ class RegionSelector:
 def detect_target_color_instant(
     region: Tuple[int, int, int, int]
 ) -> Optional[Tuple[int, int]]:
-    """Captura de pantalla instantánea para buscar el tono marrón oscuro exacto de la imagen."""
+    """Captura de pantalla instantánea para buscar la pluma/boya roja de pesca en la región seleccionada."""
     left, top, width, height = region
 
     screenshot = pyautogui.screenshot(region=region)
     frame = np.array(screenshot)
 
-    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    # Convertir a espacio de color HSV (RGB -> HSV)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
 
     # ---------------------------------------------------------
-    # RANGO EXTRACTADO DE LA IMAGEN REAL
-    # H: 0 a 30 -> Cubre desde marrones rojizos hasta tonos tierra/oliva
-    # S: 15 a 180 -> Acepta tonalidades con baja saturación/descoloridas
-    # V: 15 a 90 -> Limita el brillo para centrarse en zonas oscuras
-    #               y deschar el azul brillante/cian de las esquinas
+    # RANGO DE COLOR PARA LA BOYA / PLUMA ROJA (WotLK / WoW)
+    # En OpenCV HSV:
+    # H va de 0 a 179 (el color rojo/ámbar abarca: 0-20 y 160-180)
+    # S va de 75 a 255 (saturación para aislar la pluma roja del agua y terreno)
+    # V va de 20 a 255 (permite detectar la pluma tanto en sombra/noche como al sol)
     # ---------------------------------------------------------
-    lower_brown = np.array([0, 15, 15], dtype=np.uint8)
-    upper_brown = np.array([30, 180, 90], dtype=np.uint8)
+    lower_red1 = np.array([0, 75, 20], dtype=np.uint8)
+    upper_red1 = np.array([20, 255, 255], dtype=np.uint8)
 
-    mask = cv2.inRange(hsv, lower_brown, upper_brown)
+    lower_red2 = np.array([160, 75, 20], dtype=np.uint8)
+    upper_red2 = np.array([180, 255, 255], dtype=np.uint8)
 
-    # Filtro para eliminar pequeñas motas o ruido puntual
+    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+    mask = cv2.bitwise_or(mask1, mask2)
+
+    # Filtro morfológico para eliminar pequeñas motas o ruido puntual y rellenar la forma
     kernel = np.ones((3, 3), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_DILATE, kernel)
 
     # Buscar contornos de las áreas detectadas
     contours, _ = cv2.findContours(
         mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
-    # Filtrar por área para ignorar falsos positivos pequeños
-    valid_contours = [c for c in contours if cv2.contourArea(c) >= 20]
+    # Filtrar por área para ignorar ruido pero detectar boyas a cualquier distancia
+    valid_contours = [c for c in contours if cv2.contourArea(c) >= 5]
 
     if valid_contours:
-        # Tomar el contorno marrón más grande detectado en la región
+        # Tomar el contorno más grande detectado en la región
         largest_contour = max(valid_contours, key=cv2.contourArea)
         M = cv2.moments(largest_contour)
         if M["m00"] != 0:
             rel_x = int(M["m10"] / M["m00"])
             rel_y = int(M["m01"] / M["m00"])
+        else:
+            x, y, w, h = cv2.boundingRect(largest_contour)
+            rel_x = x + w // 2
+            rel_y = y + h // 2
 
-            abs_x = left + rel_x
-            abs_y = top + rel_y
+        abs_x = left + rel_x
+        abs_y = top + rel_y
 
-            return (abs_x, abs_y)
+        return (abs_x, abs_y)
 
     return None
 
@@ -199,7 +209,7 @@ def main() -> None:
             time.sleep(1.0)
 
             # 6. Buscar la zona del objeto
-            print("[Paso 6] Buscando zona objetivo (marrón oscura)...")
+            print("[Paso 6] Buscando zona objetivo (boya de pesca)...")
             target_pos = detect_target_color_instant(region)
 
             time.sleep(1.0)
